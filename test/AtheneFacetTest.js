@@ -16,6 +16,7 @@ describe("Athene Facet", () => {
     const FEE_DENOMINATOR = 1e4;
     let atheneFacet
     let managerFacet
+    let baseTokenAddress
     before(async function () {
         [owner, operator1, operator2, router1, router2] = await ethers.getSigners();
         const DiamondInit = await ethers.getContractFactory('DiamondInit')
@@ -67,7 +68,7 @@ describe("Athene Facet", () => {
         buyFeeRate = 100; // 1%
         sellFeeRate = 200; // 2%
         maxBuyAmount = ethers.utils.parseEther("1000");
-        delayBuyTime = 3600; // 1 hour
+        delayBuyTime = 0; // 1 hour
         initialBuyAmount = ethers.utils.parseEther("100");
 
         atheneFacet = await ethers.getContractAt('AtheneFacet', atheneDiamond.address)
@@ -91,6 +92,26 @@ describe("Athene Facet", () => {
         });
 
         await managerFacet.setWhitelistedRouters([router1.address, router2.address], true);
+
+        const tx2 = await atheneFacet.createPool({
+            name: "Test Buy Token",
+            symbol: "TEST",
+            poolDetails: "This is a test pool",
+            configIndex: configIndex,
+            router: router1.address,
+            startTime: startTime,
+            buyFeeRate: buyFeeRate,
+            sellFeeRate: sellFeeRate,
+            maxBuyAmount: maxBuyAmount,
+            delayBuyTime: delayBuyTime,
+            merkleRoot: "0x0000000000000000000000000000000000000000000000000000000000000000",
+            initialBuyAmount: 0,
+        });
+        const receipt = await tx2.wait();
+        // Extract the TokenCreated event from the logs
+        const tokenCreatedEvent = receipt.events.find(event => event.event === "TokenCreated");
+
+        baseTokenAddress = tokenCreatedEvent.args.token;
     });
 
     it("should create a new pool successfully without initialBuy", async function () {
@@ -262,76 +283,36 @@ describe("Athene Facet", () => {
         ).to.be.revertedWith("AtheneFacet: Invalid input amount");
     });
 
-    it("should revert if pool has not started", async function () {
-        const tx = await atheneFacet.createPool({
-            name: "Test Buy Token",
-            symbol: "TEST",
-            poolDetails: "This is a test pool",
-            configIndex: configIndex,
-            router: router1.address,
-            startTime: startTime,
-            buyFeeRate: buyFeeRate,
-            sellFeeRate: sellFeeRate,
-            maxBuyAmount: maxBuyAmount,
-            delayBuyTime: delayBuyTime,
-            merkleRoot: "0x0000000000000000000000000000000000000000000000000000000000000000",
-            initialBuyAmount: 0,
-        });
-        const receipt = await tx.wait();
-        // Extract the TokenCreated event from the logs
-        const tokenCreatedEvent = receipt.events.find(event => event.event === "TokenCreated");
-        expect(tokenCreatedEvent).to.not.be.undefined;
-
-        const tokenAddress = tokenCreatedEvent.args.token;
-
+    //Buy
+    it("buy should revert if pool has not started", async function () {
         const buyer = operator1;
         const amountIn = ethers.utils.parseEther("0.1");
-        const { amountOut } = await atheneFacet.getAmountOut(tokenAddress, amountIn, true);
+        const { amountOut } = await atheneFacet.getAmountOut(baseTokenAddress, amountIn, true);
         const minAmountOut = amountOut.mul(95).div(100);
 
         // Act & Assert
         await expect(
-            atheneFacet.connect(buyer).buy(tokenAddress, owner.address, amountIn, minAmountOut, [])
+            atheneFacet.connect(buyer).buy(baseTokenAddress, owner.address, amountIn, minAmountOut, [])
         ).to.be.revertedWith("AtheneFacet: Not started");
     });
 
-    it("should allow buying when all conditions are met", async function () {
-        const tx = await atheneFacet.createPool({
-            name: "Test Buy Token",
-            symbol: "TEST",
-            poolDetails: "This is a test pool",
-            configIndex: configIndex,
-            router: router1.address,
-            startTime: startTime,
-            buyFeeRate: buyFeeRate,
-            sellFeeRate: sellFeeRate,
-            maxBuyAmount: maxBuyAmount,
-            delayBuyTime: delayBuyTime,
-            merkleRoot: "0x0000000000000000000000000000000000000000000000000000000000000000",
-            initialBuyAmount: 0,
-        });
-        const receipt = await tx.wait();
-        // Extract the TokenCreated event from the logs
-        const tokenCreatedEvent = receipt.events.find(event => event.event === "TokenCreated");
-        expect(tokenCreatedEvent).to.not.be.undefined;
-
-        const tokenAddress = tokenCreatedEvent.args.token;
+    it("buy token successsfully", async function () {
 
         const buyer = operator1;
         const amountIn = ethers.utils.parseEther("0.1");
-        const { amountOut, totalFee } = await atheneFacet.getAmountOut(tokenAddress, amountIn, true);
+        const { amountOut, totalFee } = await atheneFacet.getAmountOut(baseTokenAddress, amountIn, true);
         const minAmountOut = amountOut.mul(95).div(100);
 
 
         await helpers.time.increase(3600)
 
-        const tx2 = await atheneFacet.connect(buyer).buy(tokenAddress, owner.address, amountIn, minAmountOut, [], { value: amountIn.add(totalFee) })
-        const poolInfo = await managerFacet.getPoolInfo(tokenAddress);
+        const tx2 = await atheneFacet.connect(buyer).buy(baseTokenAddress, owner.address, amountIn, minAmountOut, [], { value: amountIn.add(totalFee) })
+        const poolInfo = await managerFacet.getPoolInfo(baseTokenAddress);
         const receipt2 = await tx2.wait();
 
         const buyToken = receipt2.events.find(event => event.event === "Trade");
 
-        expect(buyToken.args.token).to.equal(tokenAddress)
+        expect(buyToken.args.token).to.equal(baseTokenAddress)
         expect(buyToken.args.user).to.equal(buyer.address)
         expect(buyToken.args.amountIn).to.equal(amountIn)
         expect(buyToken.args.isBuy).to.equal(true)
@@ -339,9 +320,31 @@ describe("Athene Facet", () => {
         expect(buyToken.args.quoteReserve).to.equal(poolInfo.virtualQuoteReserve)
     });
 
-    it("should revert if max buy amount exceeded", async function () {
+    it("buy should revert if max buy amount exceeded", async function () {
+        const buyer = operator1;
+        const amountIn = ethers.utils.parseEther("2000"); // Exceeds maxBuyAmount
+        const { amountOut } = await atheneFacet.getAmountOut(baseTokenAddress, amountIn, true);
+        const minAmountOut = amountOut.mul(95).div(100);
+
+        await expect(
+            atheneFacet.connect(buyer).buy(baseTokenAddress, owner.address, amountIn, minAmountOut, [])
+        ).to.be.revertedWith("AtheneFacet: Exceeded max buy");
+    });
+
+    it("buy should revert if the pool is not exist", async function () {
+        const buyer = operator1;
+        const amountIn = ethers.utils.parseEther("2000");
+        const { amountOut } = await atheneFacet.getAmountOut(baseTokenAddress, amountIn, true);
+        const minAmountOut = amountOut.mul(95).div(100);
+
+        await expect(
+            atheneFacet.connect(buyer).buy(operator1.address, owner.address, amountIn, minAmountOut, []) //Invalid pool
+        ).to.be.revertedWith("AtheneFacet: Invalid pool");
+    })
+
+    it("buy should revert if the state is invalid", async function () {
         const tx = await atheneFacet.createPool({
-            name: "Test Buy Token",
+            name: "Test Token",
             symbol: "TEST",
             poolDetails: "This is a test pool",
             configIndex: configIndex,
@@ -354,21 +357,163 @@ describe("Athene Facet", () => {
             merkleRoot: "0x0000000000000000000000000000000000000000000000000000000000000000",
             initialBuyAmount: 0,
         });
+
         const receipt = await tx.wait();
         // Extract the TokenCreated event from the logs
         const tokenCreatedEvent = receipt.events.find(event => event.event === "TokenCreated");
-        expect(tokenCreatedEvent).to.not.be.undefined;
 
         const tokenAddress = tokenCreatedEvent.args.token;
+
+        await managerFacet.setPoolState(tokenAddress, 1);
         const buyer = operator1;
-        const amountIn = ethers.utils.parseEther("2000"); // Exceeds maxBuyAmount
-        const { amountOut, totalFee } = await atheneFacet.getAmountOut(tokenAddress, amountIn, true);
+        const amountIn = ethers.utils.parseEther("0.1");
+        const { amountOut } = await atheneFacet.getAmountOut(tokenAddress, amountIn, true);
         const minAmountOut = amountOut.mul(95).div(100);
 
         await expect(
-            atheneFacet.connect(buyer).buy(tokenAddress, owner.address, amountIn, minAmountOut, [])
-        ).to.be.revertedWith("AtheneFacet: Exceeded max buy");
+            atheneFacet.connect(buyer).buy(tokenAddress, owner.address, amountIn, minAmountOut, []) //Invalid pool
+        ).to.be.revertedWith("AtheneFacet: Invalid state");
+    })
+
+    it("buy should revert if the buy is on cool down", async function () {
+        const tx = await atheneFacet.createPool({
+            name: "Test Token",
+            symbol: "TEST",
+            poolDetails: "This is a test pool",
+            configIndex: configIndex,
+            router: router1.address,
+            startTime: startTime,
+            buyFeeRate: buyFeeRate,
+            sellFeeRate: sellFeeRate,
+            maxBuyAmount: maxBuyAmount,
+            delayBuyTime: delayBuyTime,
+            merkleRoot: "0x0000000000000000000000000000000000000000000000000000000000000000",
+            initialBuyAmount: 0,
+        });
+
+        const receipt = await tx.wait();
+        // Extract the TokenCreated event from the logs
+        const tokenCreatedEvent = receipt.events.find(event => event.event === "TokenCreated");
+
+        const tokenAddress = tokenCreatedEvent.args.token;
+
+        await managerFacet.setDelayBuyTime(tokenAddress, 10);
+        const buyer = operator1;
+        const amountIn = ethers.utils.parseEther("0.1");
+        const { amountOut, totalFee } = await atheneFacet.getAmountOut(tokenAddress, amountIn, true);
+        const minAmountOut = amountOut.mul(95).div(100);
+
+        await atheneFacet.connect(buyer).buy(tokenAddress, owner.address, amountIn, minAmountOut, [], { value: amountIn.add(totalFee) })
+        await expect(atheneFacet.connect(buyer).buy(tokenAddress, owner.address, amountIn, minAmountOut, [], { value: amountIn.add(totalFee) })).to.be.revertedWith("AtheneFacet: Buy on cooldown")
+
+    })
+
+    it("buy should revert if insufficient liquidity", async function () {
+        const tx = await atheneFacet.createPool({
+            name: "Test Token",
+            symbol: "TEST",
+            poolDetails: "This is a test pool",
+            configIndex: configIndex,
+            router: router1.address,
+            startTime: startTime,
+            buyFeeRate: buyFeeRate,
+            sellFeeRate: sellFeeRate,
+            maxBuyAmount: maxBuyAmount,
+            delayBuyTime: delayBuyTime,
+            merkleRoot: "0x0000000000000000000000000000000000000000000000000000000000000000",
+            initialBuyAmount: 0,
+        });
+
+        const receipt = await tx.wait();
+        // Extract the TokenCreated event from the logs
+        const tokenCreatedEvent = receipt.events.find(event => event.event === "TokenCreated");
+
+        const tokenAddress = tokenCreatedEvent.args.token;
+
+        await managerFacet.setDelayBuyTime(tokenAddress, 10);
+        const buyer = operator1;
+        const amountIn = ethers.utils.parseEther("1000");
+        const { amountOut, totalFee } = await atheneFacet.getAmountOut(tokenAddress, amountIn, true);
+        const minAmountOut = amountOut.mul(95).div(100);
+
+        await atheneFacet.connect(buyer).buy(tokenAddress, owner.address, amountIn, minAmountOut, [], { value: amountIn.add(totalFee) })
+        await expect(atheneFacet.connect(buyer).buy(tokenAddress, owner.address, amountIn, minAmountOut, [], { value: amountIn.add(totalFee) })).to.be.revertedWith("AtheneFacet: Insufficient liquidity")
+    })
+
+
+    //Sell
+    it("sell should revert if the pool is not exist", async function () {
+        const seller = operator1;
+        const amountIn = ethers.utils.parseEther("0.1");
+        const { amountOut } = await atheneFacet.getAmountOut(baseTokenAddress, amountIn, false);
+        const minAmountOut = amountOut.mul(95).div(100);
+
+        await expect(
+            atheneFacet.connect(seller).sell(operator1.address, owner.address, amountIn, minAmountOut, []) //Invalid pool
+        ).to.be.revertedWith("AtheneFacet: INVALID_POOL");
+    })
+
+    it("sell should revert if pool has not started", async function () {
+        const tx = await atheneFacet.createPool({
+            name: "Test Token",
+            symbol: "TEST",
+            poolDetails: "This is a test pool",
+            configIndex: configIndex,
+            router: router1.address,
+            startTime: Math.floor(Date.now() / 1000) + 7200,
+            buyFeeRate: buyFeeRate,
+            sellFeeRate: sellFeeRate,
+            maxBuyAmount: maxBuyAmount,
+            delayBuyTime: delayBuyTime,
+            merkleRoot: "0x0000000000000000000000000000000000000000000000000000000000000000",
+            initialBuyAmount: 0,
+        });
+
+        const receipt = await tx.wait();
+        // Extract the TokenCreated event from the logs
+        const tokenCreatedEvent = receipt.events.find(event => event.event === "TokenCreated");
+
+        const tokenAddress = tokenCreatedEvent.args.token;
+
+        const seller = operator1;
+        const amountIn = ethers.utils.parseEther("0.1");
+        const { amountOut } = await atheneFacet.getAmountOut(tokenAddress, amountIn, false);
+        const minAmountOut = amountOut.mul(95).div(100);
+
+        await expect(
+            atheneFacet.connect(seller).sell(tokenAddress, owner.address, amountIn, minAmountOut, [])
+        ).to.be.revertedWith("AtheneFacet: Not started");
     });
+
+    it("sell token successfully", async function () {
+        const seller = operator1;
+        const amountIn = ethers.utils.parseEther("0.1");
+
+        const buy = await atheneFacet.getAmountOut(baseTokenAddress, amountIn, true);
+        const { amountOut } = await atheneFacet.getAmountOut(baseTokenAddress, amountIn, false);
+        const minAmountOut = amountOut.mul(95).div(100);
+
+        //buy token 
+        await atheneFacet.connect(seller).buy(baseTokenAddress, owner.address, amountIn, 0, [], { value: amountIn.add(buy.totalFee) })
+        // Approve the contract to spend tokens
+        const token = await ethers.getContractAt('AtheneToken', baseTokenAddress);
+        await token.connect(seller).approve(atheneDiamond.address, ethers.constants.MaxUint256);
+
+        const tx = await atheneFacet.connect(seller).sell(baseTokenAddress, owner.address, amountIn, minAmountOut, [])
+        const poolInfo = await managerFacet.getPoolInfo(baseTokenAddress);
+        const receipt2 = await tx.wait();
+
+        const sellToken = receipt2.events.find(event => event.event === "Trade");
+        console.log(sellToken.args)
+
+        expect(sellToken.args.token).to.equal(baseTokenAddress)
+        expect(sellToken.args.user).to.equal(seller.address)
+        expect(sellToken.args.amountIn).to.equal(amountIn)
+        expect(sellToken.args.isBuy).to.equal(false)
+        expect(sellToken.args.baseReserve).to.equal(poolInfo.virtualBaseReserve)
+        expect(sellToken.args.quoteReserve).to.equal(poolInfo.virtualQuoteReserve)
+    });
+
 
 });
 

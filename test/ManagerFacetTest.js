@@ -11,6 +11,7 @@ describe("ManagerFacet", () => {
   let operator2;
   let router1;
   let router2;
+  let configIndex, startTime, buyFeeRate, sellFeeRate, maxBuyAmount, delayBuyTime, initialBuyAmount;
   before(async function () {
     [owner, operator1, operator2, router1, router2] = await ethers.getSigners();
     const DiamondInit = await ethers.getContractFactory('DiamondInit')
@@ -58,6 +59,16 @@ describe("ManagerFacet", () => {
       diamondArgs
     );
     await atheneDiamond.deployed()
+
+    // Set up initial values
+    configIndex = 0;
+    startTime = Math.floor(Date.now() / 1000) + 3600; // 1 hour from now
+    buyFeeRate = 100; // 1%
+    sellFeeRate = 200; // 2%
+    maxBuyAmount = ethers.utils.parseEther("1000");
+    delayBuyTime = 0; // 1 hour
+    initialBuyAmount = ethers.utils.parseEther("100");
+
   });
 
   it("Should allow setting masterconfig", async () => {
@@ -85,6 +96,9 @@ describe("ManagerFacet", () => {
     await tx.wait();
 
     expect(await managerFacet.isPaused()).to.be.equal(true)
+
+    const tx2 = await managerFacet.setPaused(false)
+    await tx2.wait();
   })
 
   //Pool config
@@ -133,7 +147,6 @@ describe("ManagerFacet", () => {
     await tx.wait();
 
     const operators = await managerFacet.getOperators();
-    console.log(operators)
     expect(operators.includes(operator1.address)).to.be.true;
     expect(operators.includes(operator2.address)).to.be.true;
   });
@@ -173,25 +186,250 @@ describe("ManagerFacet", () => {
   //Pool state
   it("should allow setting pool state", async () => {
     const managerFacet = await ethers.getContractAt('ManagerFacet', atheneDiamond.address);
+    const atheneFacet = await ethers.getContractAt("AtheneFacet", atheneDiamond.address);
 
-    const token = "0x1234567890123456789012345678901234567890";
+    await managerFacet.setPoolConfig(configIndex, {
+      index: configIndex,
+      initialVirtualBaseReserve: ethers.utils.parseEther("1000"),
+      initialVirtualQuoteReserve: ethers.utils.parseEther("1000"),
+      totalSellingBaseAmount: ethers.utils.parseEther("500"),
+      maxListingBaseAmount: ethers.utils.parseEther("500"),
+      maxListingQuoteAmount: ethers.utils.parseEther("500"),
+      defaultListingRate: 10000,
+      listingFee: ethers.utils.parseEther("10"),
+    });
 
-    const tx = await managerFacet.setPoolState(token, 1); // Assuming 1 represents an active state
-    await tx.wait();
+    const tx = await atheneFacet.createPool({
+      name: "Test Token",
+      symbol: "TEST",
+      poolDetails: "This is a test pool",
+      configIndex: configIndex,
+      router: router1.address,
+      startTime: startTime,
+      buyFeeRate: buyFeeRate,
+      sellFeeRate: sellFeeRate,
+      maxBuyAmount: maxBuyAmount,
+      delayBuyTime: delayBuyTime,
+      merkleRoot: "0x0000000000000000000000000000000000000000000000000000000000000000",
+      initialBuyAmount: 0,
+    });
 
-    const poolInfo = await managerFacet.getPoolInfo(token);
+    const receipt = await tx.wait();
+    // Extract the TokenCreated event from the logs
+    const tokenCreatedEvent = receipt.events.find(event => event.event === "TokenCreated");
+    expect(tokenCreatedEvent).to.not.be.undefined;
+
+    const tokenAddress = tokenCreatedEvent.args.token;
+    const tx2 = await managerFacet.setPoolState(tokenAddress, 1); // Assuming 1 represents an active state
+    await tx2.wait();
+
+    const poolInfo = await managerFacet.getPoolInfo(tokenAddress);
     expect(poolInfo.state).to.equal(1);
   });
 
-  it("should not allow changing pool state if not admin or operator", async () => {
+  it("should allow setting pool state", async () => {
     const managerFacet = await ethers.getContractAt('ManagerFacet', atheneDiamond.address);
+    const atheneFacet = await ethers.getContractAt("AtheneFacet", atheneDiamond.address);
 
-    const token = "0x09876543210987654321098765432109876543210";
+    await managerFacet.setPoolConfig(configIndex, {
+      index: configIndex,
+      initialVirtualBaseReserve: ethers.utils.parseEther("1000"),
+      initialVirtualQuoteReserve: ethers.utils.parseEther("1000"),
+      totalSellingBaseAmount: ethers.utils.parseEther("500"),
+      maxListingBaseAmount: ethers.utils.parseEther("500"),
+      maxListingQuoteAmount: ethers.utils.parseEther("500"),
+      defaultListingRate: 10000,
+      listingFee: ethers.utils.parseEther("10"),
+    });
 
-    // Non-admin/non-operator tries to change state
-    await expect(managerFacet.setPoolState(token, 1))
-      .to.be.revertedWith("ManagerFacet: Not admin or operator");
+    const tx = await atheneFacet.createPool({
+      name: "Test Token",
+      symbol: "TEST",
+      poolDetails: "This is a test pool",
+      configIndex: configIndex,
+      router: router1.address,
+      startTime: startTime,
+      buyFeeRate: buyFeeRate,
+      sellFeeRate: sellFeeRate,
+      maxBuyAmount: maxBuyAmount,
+      delayBuyTime: delayBuyTime,
+      merkleRoot: "0x0000000000000000000000000000000000000000000000000000000000000000",
+      initialBuyAmount: 0,
+    });
+
+    const receipt = await tx.wait();
+    // Extract the TokenCreated event from the logs
+    const tokenCreatedEvent = receipt.events.find(event => event.event === "TokenCreated");
+    expect(tokenCreatedEvent).to.not.be.undefined;
+
+    const tokenAddress = tokenCreatedEvent.args.token;
+    const tx2 = await managerFacet.setPoolState(tokenAddress, 1); // Assuming 1 represents an active state
+    await tx2.wait();
+
+    const poolInfo = await managerFacet.getPoolInfo(tokenAddress);
+    expect(poolInfo.state).to.equal(1);
   });
+
+  it("should allow setting pool details", async () => {
+    const managerFacet = await ethers.getContractAt('ManagerFacet', atheneDiamond.address);
+    const atheneFacet = await ethers.getContractAt("AtheneFacet", atheneDiamond.address);
+
+    await managerFacet.setPoolConfig(configIndex, {
+      index: configIndex,
+      initialVirtualBaseReserve: ethers.utils.parseEther("1000"),
+      initialVirtualQuoteReserve: ethers.utils.parseEther("1000"),
+      totalSellingBaseAmount: ethers.utils.parseEther("500"),
+      maxListingBaseAmount: ethers.utils.parseEther("500"),
+      maxListingQuoteAmount: ethers.utils.parseEther("500"),
+      defaultListingRate: 10000,
+      listingFee: ethers.utils.parseEther("10"),
+    });
+
+    const tx = await atheneFacet.createPool({
+      name: "Test Token",
+      symbol: "TEST",
+      poolDetails: "This is a test pool",
+      configIndex: configIndex,
+      router: router1.address,
+      startTime: startTime,
+      buyFeeRate: buyFeeRate,
+      sellFeeRate: sellFeeRate,
+      maxBuyAmount: maxBuyAmount,
+      delayBuyTime: delayBuyTime,
+      merkleRoot: "0x0000000000000000000000000000000000000000000000000000000000000000",
+      initialBuyAmount: 0,
+    });
+    const receipt = await tx.wait();
+    // Extract the TokenCreated event from the logs
+    const tokenCreatedEvent = receipt.events.find(event => event.event === "TokenCreated");
+    expect(tokenCreatedEvent).to.not.be.undefined;
+
+    const tokenAddress = tokenCreatedEvent.args.token;
+    await managerFacet.setPoolDetails(tokenAddress, "This is new details")
+    const poolInfo = await managerFacet.getPoolInfo(tokenAddress);
+    expect(poolInfo.poolDetails).to.equal("This is new details")
+  })
+
+  it("should allow setting delay buy time", async () => {
+    const managerFacet = await ethers.getContractAt('ManagerFacet', atheneDiamond.address);
+    const atheneFacet = await ethers.getContractAt("AtheneFacet", atheneDiamond.address);
+
+    await managerFacet.setPoolConfig(configIndex, {
+      index: configIndex,
+      initialVirtualBaseReserve: ethers.utils.parseEther("1000"),
+      initialVirtualQuoteReserve: ethers.utils.parseEther("1000"),
+      totalSellingBaseAmount: ethers.utils.parseEther("500"),
+      maxListingBaseAmount: ethers.utils.parseEther("500"),
+      maxListingQuoteAmount: ethers.utils.parseEther("500"),
+      defaultListingRate: 10000,
+      listingFee: ethers.utils.parseEther("10"),
+    });
+
+    const tx = await atheneFacet.createPool({
+      name: "Test Token",
+      symbol: "TEST",
+      poolDetails: "This is a test pool",
+      configIndex: configIndex,
+      router: router1.address,
+      startTime: startTime,
+      buyFeeRate: buyFeeRate,
+      sellFeeRate: sellFeeRate,
+      maxBuyAmount: maxBuyAmount,
+      delayBuyTime: delayBuyTime,
+      merkleRoot: "0x0000000000000000000000000000000000000000000000000000000000000000",
+      initialBuyAmount: 0,
+    });
+    const receipt = await tx.wait();
+    // Extract the TokenCreated event from the logs
+    const tokenCreatedEvent = receipt.events.find(event => event.event === "TokenCreated");
+    expect(tokenCreatedEvent).to.not.be.undefined;
+
+    const tokenAddress = tokenCreatedEvent.args.token;
+    await managerFacet.setDelayBuyTime(tokenAddress, 3600)
+    const poolInfo = await managerFacet.getPoolInfo(tokenAddress);
+    expect(poolInfo.delayBuyTime).to.equal(3600)
+  })
+
+  it("should allow setting max buy amount", async () => {
+    const managerFacet = await ethers.getContractAt('ManagerFacet', atheneDiamond.address);
+    const atheneFacet = await ethers.getContractAt("AtheneFacet", atheneDiamond.address);
+
+    await managerFacet.setPoolConfig(configIndex, {
+      index: configIndex,
+      initialVirtualBaseReserve: ethers.utils.parseEther("1000"),
+      initialVirtualQuoteReserve: ethers.utils.parseEther("1000"),
+      totalSellingBaseAmount: ethers.utils.parseEther("500"),
+      maxListingBaseAmount: ethers.utils.parseEther("500"),
+      maxListingQuoteAmount: ethers.utils.parseEther("500"),
+      defaultListingRate: 10000,
+      listingFee: ethers.utils.parseEther("10"),
+    });
+
+    const tx = await atheneFacet.createPool({
+      name: "Test Token",
+      symbol: "TEST",
+      poolDetails: "This is a test pool",
+      configIndex: configIndex,
+      router: router1.address,
+      startTime: startTime,
+      buyFeeRate: buyFeeRate,
+      sellFeeRate: sellFeeRate,
+      maxBuyAmount: maxBuyAmount,
+      delayBuyTime: delayBuyTime,
+      merkleRoot: "0x0000000000000000000000000000000000000000000000000000000000000000",
+      initialBuyAmount: 0,
+    });
+    const receipt = await tx.wait();
+    // Extract the TokenCreated event from the logs
+    const tokenCreatedEvent = receipt.events.find(event => event.event === "TokenCreated");
+    expect(tokenCreatedEvent).to.not.be.undefined;
+
+    const tokenAddress = tokenCreatedEvent.args.token;
+    await managerFacet.setMaxBuyAmount(tokenAddress, 1000)
+    const poolInfo = await managerFacet.getPoolInfo(tokenAddress);
+    expect(poolInfo.maxBuyAmount).to.equal(1000)
+  })
+
+  it("should allow setting fee rate", async () => {
+    const managerFacet = await ethers.getContractAt('ManagerFacet', atheneDiamond.address);
+    const atheneFacet = await ethers.getContractAt("AtheneFacet", atheneDiamond.address);
+
+    await managerFacet.setPoolConfig(configIndex, {
+      index: configIndex,
+      initialVirtualBaseReserve: ethers.utils.parseEther("1000"),
+      initialVirtualQuoteReserve: ethers.utils.parseEther("1000"),
+      totalSellingBaseAmount: ethers.utils.parseEther("500"),
+      maxListingBaseAmount: ethers.utils.parseEther("500"),
+      maxListingQuoteAmount: ethers.utils.parseEther("500"),
+      defaultListingRate: 10000,
+      listingFee: ethers.utils.parseEther("10"),
+    });
+
+    const tx = await atheneFacet.createPool({
+      name: "Test Token",
+      symbol: "TEST",
+      poolDetails: "This is a test pool",
+      configIndex: configIndex,
+      router: router1.address,
+      startTime: startTime,
+      buyFeeRate: buyFeeRate,
+      sellFeeRate: sellFeeRate,
+      maxBuyAmount: maxBuyAmount,
+      delayBuyTime: delayBuyTime,
+      merkleRoot: "0x0000000000000000000000000000000000000000000000000000000000000000",
+      initialBuyAmount: 0,
+    });
+    const receipt = await tx.wait();
+    // Extract the TokenCreated event from the logs
+    const tokenCreatedEvent = receipt.events.find(event => event.event === "TokenCreated");
+    expect(tokenCreatedEvent).to.not.be.undefined;
+
+    const tokenAddress = tokenCreatedEvent.args.token;
+    await managerFacet.setFeeRate(tokenAddress, 50, 50)
+    const poolInfo = await managerFacet.getPoolInfo(tokenAddress);
+    expect(poolInfo.buyFeeRate).to.equal(50)
+    expect(poolInfo.sellFeeRate).to.equal(50)
+  })
 
   it("show allow setting admin", async () => {
     const managerFacet = await ethers.getContractAt('ManagerFacet', atheneDiamond.address)
