@@ -7,6 +7,7 @@ const helpers = require("@nomicfoundation/hardhat-network-helpers");
 
 describe("Athene Facet", () => {
     let atheneDiamond;
+    let athene;
     let owner;
     let operator1;
     let operator2;
@@ -34,7 +35,6 @@ describe("Athene Facet", () => {
             const Facet = await ethers.getContractFactory(FacetName)
             const facet = await Facet.deploy()
             await facet.deployed()
-            console.log(`${FacetName} deployed: ${facet.address}`)
             facetCuts.push({
                 facetAddress: facet.address,
                 action: FacetCutAction.Add,
@@ -62,6 +62,10 @@ describe("Athene Facet", () => {
         );
         await atheneDiamond.deployed()
 
+        const Athene = await ethers.getContractFactory("Athene");
+        athene = await Athene.deploy("Athene", "ATH");
+        await athene.deployed()
+
         // Set up initial values
         configIndex = 0;
         startTime = Math.floor(Date.now() / 1000) + 3600; // 1 hour from now
@@ -77,7 +81,7 @@ describe("Athene Facet", () => {
         const feeReceiver = "0xa084b43e09c74E401b7500c3D30a1B569e4934AD"
         const feeBps = 50
         const refBps = 50
-        const tx = await managerFacet.setMasterConfig(wethAddress, feeReceiver, feeBps, refBps)
+        const tx = await managerFacet.setMasterConfig(wethAddress, feeReceiver, feeBps, refBps, athene.address)
         await tx.wait()
 
         await managerFacet.setPoolConfig(configIndex, {
@@ -162,6 +166,7 @@ describe("Athene Facet", () => {
 
         const masterConfig = await managerFacet.getMasterConfig()
         const totalFee = (initialBuy * masterConfig.feeBps) / FEE_DENOMINATOR + (initialBuy * buyFeeRate) / FEE_DENOMINATOR;
+        await athene.approve(atheneDiamond.address, initialBuy.add(totalFee));
         const tx = await atheneFacet.createPool({
             name: "Test Token",
             symbol: "TEST",
@@ -175,7 +180,7 @@ describe("Athene Facet", () => {
             delayBuyTime: delayBuyTime,
             merkleRoot: "0x0000000000000000000000000000000000000000000000000000000000000000",
             initialBuyAmount: initialBuy,
-        }, { value: initialBuy.add(totalFee) });
+        });
 
         const receipt = await tx.wait();
         // Extract the TokenCreated event from the logs
@@ -504,7 +509,6 @@ describe("Athene Facet", () => {
         const receipt2 = await tx.wait();
 
         const sellToken = receipt2.events.find(event => event.event === "Trade");
-        console.log(sellToken.args)
 
         expect(sellToken.args.token).to.equal(baseTokenAddress)
         expect(sellToken.args.user).to.equal(seller.address)

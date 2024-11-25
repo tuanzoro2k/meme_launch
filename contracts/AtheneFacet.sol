@@ -58,12 +58,15 @@ contract AtheneFacet is AtheneBase, ReentrancyGuard {
     event ReadyToList(address indexed token, uint256 timestamp);
     event Finalize(address indexed token, address pair, uint256 timestamp);
 
-    function createPool(
-        CreatePoolParams memory params
-    ) external payable notPaused {
-        require(s.routers.contains(params.router), "AtheneFacet: Invalid router");
+    function createPool(CreatePoolParams memory params) external notPaused {
+        require(
+            s.routers.contains(params.router),
+            "AtheneFacet: Invalid router"
+        );
 
-        AthenePoolConfig memory config = s.poolConfigMapping[params.configIndex];
+        AthenePoolConfig memory config = s.poolConfigMapping[
+            params.configIndex
+        ];
         require(
             config.initialVirtualBaseReserve > 0,
             "AtheneFacet: Invalid config"
@@ -138,7 +141,7 @@ contract AtheneFacet is AtheneBase, ReentrancyGuard {
         uint256 amountIn,
         uint256 minAmountOut,
         bytes32[] memory proof
-    ) external payable notPaused nonReentrant {
+    ) external notPaused nonReentrant {
         _buy(token, referrer, amountIn, minAmountOut, proof, false);
     }
 
@@ -197,9 +200,12 @@ contract AtheneFacet is AtheneBase, ReentrancyGuard {
             uint256 platformFee,
             uint256 tradeFee
         ) = _getAmountOutWithPoolInfo(poolInfo, amountIn, true);
-        require(
-            amountIn + totalFee == msg.value,
-            "AtheneFacet: Invalid input amount"
+
+        LibAthene.safeTransferFrom(
+            s.masterConfig.poolToken,
+            msg.sender,
+            address(this),
+            amountIn + totalFee
         );
 
         require(
@@ -289,7 +295,11 @@ contract AtheneFacet is AtheneBase, ReentrancyGuard {
             address(this),
             amountIn
         );
-        payable(msg.sender).transfer(actualAmountOut);
+        LibAthene.safeTransfer(
+            s.masterConfig.poolToken,
+            msg.sender,
+            actualAmountOut
+        );
 
         emit Trade(
             poolInfo.token,
@@ -317,7 +327,11 @@ contract AtheneFacet is AtheneBase, ReentrancyGuard {
             poolInfo.minQuoteReserve;
         uint256 currentGlobalBalance = address(this).balance;
 
-        payable(s.masterConfig.feeReceiver).transfer(poolInfo.listingFee);
+        LibAthene.safeTransfer(
+            s.masterConfig.poolToken,
+            s.masterConfig.feeReceiver,
+            poolInfo.listingFee
+        );
 
         (
             uint256 rate,
@@ -413,9 +427,11 @@ contract AtheneFacet is AtheneBase, ReentrancyGuard {
         if (quoteReserve == 0 && baseReserve == 0) {
             // Only pair has been created, no liquidity
             // Do nothing, we can use the original liquidity amounts
-            router.addLiquidityETH{value: listingQuoteAmount}(
+            router.addLiquidity(
+                s.masterConfig.poolToken,
                 poolInfo.token,
                 listingBaseAmount,
+                listingQuoteAmount,
                 listingBaseAmount,
                 listingQuoteAmount,
                 address(0),
@@ -838,12 +854,20 @@ contract AtheneFacet is AtheneBase, ReentrancyGuard {
             referrerFee =
                 (platformFee * s.masterConfig.refBps) /
                 FEE_DENOMINATOR;
-            payable(referrer).transfer(referrerFee);
+            LibAthene.safeTransfer(
+                s.masterConfig.poolToken,
+                referrer,
+                referrerFee
+            );
         }
-        payable(s.masterConfig.feeReceiver).transfer(platformFee - referrerFee);
+        LibAthene.safeTransfer(
+            s.masterConfig.poolToken,
+            s.masterConfig.feeReceiver,
+            platformFee - referrerFee
+        );
 
         if (tradeFee > 0) {
-            payable(owner).transfer(tradeFee);
+            LibAthene.safeTransfer(s.masterConfig.poolToken, owner, tradeFee);
         }
     }
 
@@ -892,7 +916,3 @@ contract AtheneFacet is AtheneBase, ReentrancyGuard {
         }
     }
 }
-
-
-
-

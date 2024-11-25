@@ -18,6 +18,7 @@ struct AtheneMasterConfig {
     address feeReceiver;
     uint256 refBps;
     address wethAddress;
+    address poolToken;
     bool paused;
 }
 

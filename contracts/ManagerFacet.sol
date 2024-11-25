@@ -32,12 +32,14 @@ contract ManagerFacet is AtheneBase {
         address weth,
         address feeReceiver,
         uint256 feeBps,
-        uint256 refBps
+        uint256 refBps,
+        address poolToken
     ) external onlyAdmin {
         s.masterConfig.wethAddress = weth;
         s.masterConfig.feeReceiver = feeReceiver;
         s.masterConfig.feeBps = feeBps;
         s.masterConfig.refBps = refBps;
+        s.masterConfig.poolToken = poolToken;
     }
 
     function getMasterConfig()
